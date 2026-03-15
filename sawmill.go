@@ -4,6 +4,7 @@
 package sawmill
 
 import (
+	"compress/gzip"
 	"fmt"
 	"io"
 	"os"
@@ -83,9 +84,15 @@ type Logger struct {
 	// based on age.
 	MaxAge int
 
-	// Compress determines if the rotated log files should be compressed using
-	// gzip. The default is not to perform compression.
+	// Compress determines if the rotated log files should be compressed.
+	// The default is not to perform compression. When true, compression uses
+	// the format specified by CompressFormat (default: gzip).
 	Compress bool
+
+	// CompressFormat specifies the compression format for rotated files.
+	// Supported values: "gzip" (default). Compression runs in a background
+	// goroutine and does not block writes.
+	CompressFormat string
 
 	// LocalTime determines if the time used for formatting the timestamps in
 	// backup files is the computer's local time. The default is to use UTC
@@ -108,12 +115,13 @@ type Logger struct {
 	// clock is used for testing to control time.
 	clock clock
 
-	mu          sync.Mutex
-	file        *os.File
-	size        int64
-	lastRotate  time.Time
-	done        chan struct{}
+	mu            sync.Mutex
+	file          *os.File
+	size          int64
+	lastRotate    time.Time
+	done          chan struct{}
 	tickerRunning bool
+	compressWg    sync.WaitGroup
 }
 
 // clock is an interface for time operations, allowing tests to control time.
@@ -170,12 +178,16 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 }
 
 // Close implements io.Closer, and closes the current logfile.
-// It stops any background goroutines (ticker, signal handler).
+// It stops any background goroutines (ticker, signal handler) and waits
+// for any in-flight compression to finish.
 func (l *Logger) Close() error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.stopTicker()
-	return l.close()
+	err := l.close()
+	l.mu.Unlock()
+	// Wait for compression outside the lock to avoid deadlock.
+	l.compressWg.Wait()
+	return err
 }
 
 // Rotate causes Logger to close the existing log file and immediately create a
@@ -196,7 +208,8 @@ func (l *Logger) rotate() error {
 		return err
 	}
 
-	if err := l.moveFile(); err != nil {
+	backupName, err := l.moveFile()
+	if err != nil {
 		return err
 	}
 
@@ -205,6 +218,12 @@ func (l *Logger) rotate() error {
 	}
 
 	l.lastRotate = l.now()
+
+	if l.Compress && backupName != "" {
+		l.compressWg.Add(1)
+		go l.compressFile(backupName)
+	}
+
 	l.cleanup()
 	return nil
 }
@@ -270,15 +289,16 @@ func (l *Logger) openNew() error {
 }
 
 // moveFile renames the current log file with a timestamp. The caller must hold l.mu.
-func (l *Logger) moveFile() error {
+// Returns the backup file path, or empty string if nothing was moved.
+func (l *Logger) moveFile() (string, error) {
 	filename := l.filename()
 	if _, err := os.Stat(filename); err != nil {
 		// File doesn't exist, nothing to move.
-		return nil
+		return "", nil
 	}
 
 	name := l.backupName(filename, l.LocalTime)
-	return os.Rename(filename, name)
+	return name, os.Rename(filename, name)
 }
 
 // backupName creates a new filename from the given name, inserting a timestamp
@@ -546,6 +566,58 @@ func (l *Logger) tickerInterval() time.Duration {
 	}
 	// For clock-aligned rotation, check every 10 seconds.
 	return 10 * time.Second
+}
+
+// compressFile compresses a backup file using gzip. It writes to a temporary
+// file first, then renames to the final name to avoid serving partial files.
+// This runs in a background goroutine.
+func (l *Logger) compressFile(src string) {
+	defer l.compressWg.Done()
+
+	dst := src + ".gz"
+	tmp := dst + ".tmp"
+
+	in, err := os.Open(src)
+	if err != nil {
+		return
+	}
+
+	out, err := os.Create(tmp)
+	if err != nil {
+		in.Close()
+		return
+	}
+
+	gz := gzip.NewWriter(out)
+	if _, err := io.Copy(gz, in); err != nil {
+		gz.Close()
+		out.Close()
+		in.Close()
+		_ = os.Remove(tmp)
+		return
+	}
+
+	if err := gz.Close(); err != nil {
+		out.Close()
+		in.Close()
+		_ = os.Remove(tmp)
+		return
+	}
+	if err := out.Close(); err != nil {
+		in.Close()
+		_ = os.Remove(tmp)
+		return
+	}
+	in.Close()
+
+	// Atomic rename: tmp → final. Prevents serving partial files.
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return
+	}
+
+	// Remove the uncompressed original.
+	_ = os.Remove(src)
 }
 
 // logInfo is a convenience struct to hold a backup file's timestamp and os.FileInfo.

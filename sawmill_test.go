@@ -1,6 +1,8 @@
 package sawmill
 
 import (
+	"compress/gzip"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -393,5 +395,119 @@ func TestRotateEveryAndSizeCombined(t *testing.T) {
 	entries, _ = os.ReadDir(dir)
 	if len(entries) < 3 {
 		t.Fatalf("expected both size and time rotations, got %d files", len(entries))
+	}
+}
+
+func TestCompressRotatedFiles(t *testing.T) {
+	l := newTestLogger(t)
+	l.Compress = true
+	defer l.Close()
+
+	l.Write([]byte("before rotation\n"))
+	l.Rotate()
+	l.Write([]byte("after rotation\n"))
+	l.Close() // waits for compression
+
+	dir := filepath.Dir(l.Filename)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir failed: %v", err)
+	}
+
+	var hasGz bool
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".gz") {
+			hasGz = true
+			// Verify it's valid gzip.
+			f, err := os.Open(filepath.Join(dir, e.Name()))
+			if err != nil {
+				t.Fatalf("open gz file: %v", err)
+			}
+			gr, err := gzip.NewReader(f)
+			if err != nil {
+				f.Close()
+				t.Fatalf("gzip.NewReader: %v", err)
+			}
+			data, err := io.ReadAll(gr)
+			if err != nil {
+				gr.Close()
+				f.Close()
+				t.Fatalf("read gzip: %v", err)
+			}
+			gr.Close()
+			f.Close()
+			if string(data) != "before rotation\n" {
+				t.Fatalf("unexpected compressed content: %q", data)
+			}
+		}
+	}
+	if !hasGz {
+		t.Fatal("expected a .gz backup file")
+	}
+}
+
+func TestCompressRemovesOriginal(t *testing.T) {
+	l := newTestLogger(t)
+	l.Compress = true
+	defer l.Close()
+
+	l.Write([]byte("data\n"))
+	l.Rotate()
+	l.Close()
+
+	dir := filepath.Dir(l.Filename)
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		name := e.Name()
+		if name == filepath.Base(l.Filename) {
+			continue
+		}
+		// Backup files should only be .gz, not uncompressed.
+		if !strings.HasSuffix(name, ".gz") {
+			t.Fatalf("expected only .gz backups, found: %s", name)
+		}
+	}
+}
+
+func TestNoCompressWhenDisabled(t *testing.T) {
+	l := newTestLogger(t)
+	l.Compress = false
+	defer l.Close()
+
+	l.Write([]byte("data\n"))
+	l.Rotate()
+	l.Close()
+
+	dir := filepath.Dir(l.Filename)
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".gz") {
+			t.Fatal("did not expect .gz files when Compress=false")
+		}
+	}
+}
+
+func TestCompressMultipleRotations(t *testing.T) {
+	l := newTestLogger(t)
+	l.Compress = true
+	defer l.Close()
+
+	for i := 0; i < 5; i++ {
+		l.Write([]byte("data\n"))
+		l.Rotate()
+		time.Sleep(2 * time.Millisecond) // ensure unique timestamps
+	}
+	l.Close()
+
+	dir := filepath.Dir(l.Filename)
+	entries, _ := os.ReadDir(dir)
+	gzCount := 0
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".gz") {
+			gzCount++
+		}
+	}
+	if gzCount < 5 {
+		t.Fatalf("expected at least 5 .gz files, got %d", gzCount)
 	}
 }
