@@ -122,6 +122,8 @@ type Logger struct {
 	done          chan struct{}
 	tickerRunning bool
 	compressWg    sync.WaitGroup
+	sigCh         chan os.Signal
+	sigRunning    bool
 }
 
 // clock is an interface for time operations, allowing tests to control time.
@@ -183,6 +185,7 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 func (l *Logger) Close() error {
 	l.mu.Lock()
 	l.stopTicker()
+	l.stopSignalHandler()
 	err := l.close()
 	l.mu.Unlock()
 	// Wait for compression outside the lock to avoid deadlock.
