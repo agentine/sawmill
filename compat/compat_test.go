@@ -41,11 +41,11 @@ func TestRotate(t *testing.T) {
 	l := newTestLogger(t)
 	defer l.Close()
 
-	l.Write([]byte("before\n"))
+	_, _ = l.Write([]byte("before\n"))
 	if err := l.Rotate(); err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
-	l.Write([]byte("after\n"))
+	_, _ = l.Write([]byte("after\n"))
 
 	data, _ := os.ReadFile(l.Filename)
 	if string(data) != "after\n" {
@@ -61,7 +61,7 @@ func TestRotate(t *testing.T) {
 
 func TestClose(t *testing.T) {
 	l := newTestLogger(t)
-	l.Write([]byte("data\n"))
+	_, _ = l.Write([]byte("data\n"))
 	if err := l.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestCompat_FieldsPropagated(t *testing.T) {
 	l.LocalTime = true
 	defer l.Close()
 
-	l.Write([]byte("test\n"))
+	_, _ = l.Write([]byte("test\n"))
 
 	inner := l.logger()
 	if inner.MaxSize != 50 {

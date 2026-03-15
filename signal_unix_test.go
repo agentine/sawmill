@@ -15,7 +15,7 @@ func TestSIGHUPTriggersRotation(t *testing.T) {
 	defer l.Close()
 
 	l.EnableSignalHandling()
-	l.Write([]byte("before sighup\n"))
+	_, _ = l.Write([]byte("before sighup\n"))
 
 	// Send SIGHUP to self.
 	proc, err := os.FindProcess(os.Getpid())
@@ -29,7 +29,7 @@ func TestSIGHUPTriggersRotation(t *testing.T) {
 	// Give the signal handler time to process.
 	time.Sleep(100 * time.Millisecond)
 
-	l.Write([]byte("after sighup\n"))
+	_, _ = l.Write([]byte("after sighup\n"))
 
 	dir := filepath.Dir(l.Filename)
 	entries, _ := os.ReadDir(dir)
@@ -52,13 +52,13 @@ func TestEnableSignalHandlingIdempotent(t *testing.T) {
 	l.EnableSignalHandling()
 	l.EnableSignalHandling()
 
-	l.Write([]byte("ok\n"))
+	_, _ = l.Write([]byte("ok\n"))
 }
 
 func TestCloseStopsSignalHandler(t *testing.T) {
 	l := newTestLogger(t)
 	l.EnableSignalHandling()
-	l.Write([]byte("data\n"))
+	_, _ = l.Write([]byte("data\n"))
 
 	if err := l.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

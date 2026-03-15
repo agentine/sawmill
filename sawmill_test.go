@@ -74,11 +74,11 @@ func TestWriteAppendsToExisting(t *testing.T) {
 	l := newTestLogger(t)
 	defer l.Close()
 
-	l.Write([]byte("first\n"))
+	_, _ = l.Write([]byte("first\n"))
 	l.Close()
 
 	// Reopen by writing again.
-	l.Write([]byte("second\n"))
+	_, _ = l.Write([]byte("second\n"))
 	l.Close()
 
 	data, err := os.ReadFile(l.Filename)
@@ -131,11 +131,11 @@ func TestRotate(t *testing.T) {
 	l := newTestLogger(t)
 	defer l.Close()
 
-	l.Write([]byte("before rotation\n"))
+	_, _ = l.Write([]byte("before rotation\n"))
 	if err := l.Rotate(); err != nil {
 		t.Fatalf("Rotate failed: %v", err)
 	}
-	l.Write([]byte("after rotation\n"))
+	_, _ = l.Write([]byte("after rotation\n"))
 
 	// Current file should only have post-rotation content.
 	data, err := os.ReadFile(l.Filename)
@@ -166,8 +166,8 @@ func TestMaxBackups(t *testing.T) {
 	// Create several rotations.
 	msg := strings.Repeat("x", 512*1024) + "\n" // ~512KB
 	for i := 0; i < 10; i++ {
-		l.Write([]byte(msg))
-		l.Write([]byte(msg)) // triggers rotation
+		_, _ = l.Write([]byte(msg))
+		_, _ = l.Write([]byte(msg)) // triggers rotation
 		time.Sleep(2 * time.Millisecond)
 	}
 
@@ -191,11 +191,11 @@ func TestMaxAge(t *testing.T) {
 	prefix := strings.TrimSuffix(filepath.Base(l.Filename), ext)
 	oldTime := time.Now().UTC().Add(-48 * time.Hour)
 	oldName := prefix + "-" + oldTime.Format(backupTimeFormat) + ext
-	os.WriteFile(filepath.Join(dir, oldName), []byte("old"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, oldName), []byte("old"), 0644)
 
 	l.MaxAge = 1 // 1 day
-	l.Write([]byte("trigger\n"))
-	l.Rotate()
+	_, _ = l.Write([]byte("trigger\n"))
+	_ = l.Rotate()
 
 	// The old backup should have been cleaned up.
 	if _, err := os.Stat(filepath.Join(dir, oldName)); !os.IsNotExist(err) {
@@ -205,7 +205,7 @@ func TestMaxAge(t *testing.T) {
 
 func TestClose(t *testing.T) {
 	l := newTestLogger(t)
-	l.Write([]byte("data\n"))
+	_, _ = l.Write([]byte("data\n"))
 	if err := l.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
 	}
@@ -262,8 +262,8 @@ func TestLocalTime(t *testing.T) {
 	l.LocalTime = true
 	defer l.Close()
 
-	l.Write([]byte("data\n"))
-	l.Rotate()
+	_, _ = l.Write([]byte("data\n"))
+	_ = l.Rotate()
 
 	files, err := l.oldLogFiles()
 	if err != nil {
@@ -282,7 +282,7 @@ func TestRotateEvery(t *testing.T) {
 	defer l.Close()
 
 	// First write — no rotation yet.
-	l.Write([]byte("msg1\n"))
+	_, _ = l.Write([]byte("msg1\n"))
 
 	dir := filepath.Dir(l.Filename)
 	entries, _ := os.ReadDir(dir)
@@ -292,7 +292,7 @@ func TestRotateEvery(t *testing.T) {
 
 	// Advance past RotateEvery, next write should trigger rotation.
 	clk.Advance(61 * time.Minute)
-	l.Write([]byte("msg2\n"))
+	_, _ = l.Write([]byte("msg2\n"))
 
 	entries, _ = os.ReadDir(dir)
 	if len(entries) < 2 {
@@ -314,11 +314,11 @@ func TestRotateAtMidnight(t *testing.T) {
 	l.clock = clk
 	defer l.Close()
 
-	l.Write([]byte("before midnight\n"))
+	_, _ = l.Write([]byte("before midnight\n"))
 
 	// Advance to 00:01 next day.
 	clk.Set(time.Date(2026, 1, 2, 0, 1, 0, 0, time.UTC))
-	l.Write([]byte("after midnight\n"))
+	_, _ = l.Write([]byte("after midnight\n"))
 
 	dir := filepath.Dir(l.Filename)
 	entries, _ := os.ReadDir(dir)
@@ -339,11 +339,11 @@ func TestRotateAtHourly(t *testing.T) {
 	l.clock = clk
 	defer l.Close()
 
-	l.Write([]byte("before hour\n"))
+	_, _ = l.Write([]byte("before hour\n"))
 
 	// Advance to next hour.
 	clk.Set(time.Date(2026, 1, 1, 11, 0, 1, 0, time.UTC))
-	l.Write([]byte("after hour\n"))
+	_, _ = l.Write([]byte("after hour\n"))
 
 	dir := filepath.Dir(l.Filename)
 	entries, _ := os.ReadDir(dir)
@@ -358,7 +358,7 @@ func TestNoTimeRotationWhenNotConfigured(t *testing.T) {
 
 	// No RotateEvery or RotateAt — should behave like lumberjack.
 	for i := 0; i < 100; i++ {
-		l.Write([]byte("data\n"))
+		_, _ = l.Write([]byte("data\n"))
 	}
 
 	dir := filepath.Dir(l.Filename)
@@ -378,9 +378,9 @@ func TestRotateEveryAndSizeCombined(t *testing.T) {
 
 	// First, trigger a size-based rotation.
 	msg := strings.Repeat("x", 512*1024) + "\n"
-	l.Write([]byte(msg))
-	l.Write([]byte(msg))
-	l.Write([]byte(msg)) // should trigger size rotation
+	_, _ = l.Write([]byte(msg))
+	_, _ = l.Write([]byte(msg))
+	_, _ = l.Write([]byte(msg)) // should trigger size rotation
 
 	dir := filepath.Dir(l.Filename)
 	entries, _ := os.ReadDir(dir)
@@ -390,7 +390,7 @@ func TestRotateEveryAndSizeCombined(t *testing.T) {
 
 	// Now trigger a time-based rotation.
 	clk.Advance(61 * time.Minute)
-	l.Write([]byte("after time\n"))
+	_, _ = l.Write([]byte("after time\n"))
 
 	entries, _ = os.ReadDir(dir)
 	if len(entries) < 3 {
@@ -403,9 +403,9 @@ func TestCompressRotatedFiles(t *testing.T) {
 	l.Compress = true
 	defer l.Close()
 
-	l.Write([]byte("before rotation\n"))
-	l.Rotate()
-	l.Write([]byte("after rotation\n"))
+	_, _ = l.Write([]byte("before rotation\n"))
+	_ = l.Rotate()
+	_, _ = l.Write([]byte("after rotation\n"))
 	l.Close() // waits for compression
 
 	dir := filepath.Dir(l.Filename)
@@ -451,8 +451,8 @@ func TestCompressRemovesOriginal(t *testing.T) {
 	l.Compress = true
 	defer l.Close()
 
-	l.Write([]byte("data\n"))
-	l.Rotate()
+	_, _ = l.Write([]byte("data\n"))
+	_ = l.Rotate()
 	l.Close()
 
 	dir := filepath.Dir(l.Filename)
@@ -474,8 +474,8 @@ func TestNoCompressWhenDisabled(t *testing.T) {
 	l.Compress = false
 	defer l.Close()
 
-	l.Write([]byte("data\n"))
-	l.Rotate()
+	_, _ = l.Write([]byte("data\n"))
+	_ = l.Rotate()
 	l.Close()
 
 	dir := filepath.Dir(l.Filename)
@@ -493,8 +493,8 @@ func TestCompressMultipleRotations(t *testing.T) {
 	defer l.Close()
 
 	for i := 0; i < 5; i++ {
-		l.Write([]byte("data\n"))
-		l.Rotate()
+		_, _ = l.Write([]byte("data\n"))
+		_ = l.Rotate()
 		time.Sleep(2 * time.Millisecond) // ensure unique timestamps
 	}
 	l.Close()
@@ -524,7 +524,7 @@ func TestConcurrentWrites(t *testing.T) {
 			defer wg.Done()
 			msg := strings.Repeat("y", 100) + "\n"
 			for i := 0; i < 200; i++ {
-				l.Write([]byte(msg))
+				_, _ = l.Write([]byte(msg))
 			}
 		}()
 	}
@@ -620,8 +620,8 @@ func TestOldLogFilesWithCompressedBackups(t *testing.T) {
 	name1 := prefix + "-" + ts1.Format(backupTimeFormat) + ext + ".gz"
 	name2 := prefix + "-" + ts2.Format(backupTimeFormat) + ext
 
-	os.WriteFile(filepath.Join(dir, name1), []byte("gz"), 0644)
-	os.WriteFile(filepath.Join(dir, name2), []byte("plain"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, name1), []byte("gz"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, name2), []byte("plain"), 0644)
 
 	files, err := l.oldLogFiles()
 	if err != nil {
@@ -639,8 +639,8 @@ func TestMaxBackupsWithCompression(t *testing.T) {
 	defer l.Close()
 
 	for i := 0; i < 5; i++ {
-		l.Write([]byte("data\n"))
-		l.Rotate()
+		_, _ = l.Write([]byte("data\n"))
+		_ = l.Rotate()
 		time.Sleep(2 * time.Millisecond)
 	}
 	l.Close()
@@ -656,7 +656,7 @@ func TestMaxBackupsWithCompression(t *testing.T) {
 
 func TestWriteAfterClose(t *testing.T) {
 	l := newTestLogger(t)
-	l.Write([]byte("first\n"))
+	_, _ = l.Write([]byte("first\n"))
 	l.Close()
 
 	// Writing after close should work — opens a new file.
@@ -682,7 +682,7 @@ func TestTickerWithRealClock(t *testing.T) {
 	l.RotateEvery = time.Hour // won't actually fire, just starts ticker
 	defer l.Close()
 
-	l.Write([]byte("start ticker\n"))
+	_, _ = l.Write([]byte("start ticker\n"))
 
 	// Verify ticker was started.
 	l.mu.Lock()
@@ -707,7 +707,7 @@ func TestOpenExistingOrNewStatError(t *testing.T) {
 	defer l.Close()
 
 	// Write to create the file.
-	l.Write([]byte("test\n"))
+	_, _ = l.Write([]byte("test\n"))
 	l.Close()
 
 	// Write again — exercises openExistingOrNew with existing file.
@@ -747,13 +747,13 @@ func TestOldLogFilesIgnoresDirectories(t *testing.T) {
 	l := newTestLogger(t)
 	defer l.Close()
 
-	l.Write([]byte("data\n"))
+	_, _ = l.Write([]byte("data\n"))
 	dir := filepath.Dir(l.Filename)
 	// Create a directory with a name that matches the backup prefix.
 	base := filepath.Base(l.Filename)
 	ext := filepath.Ext(base)
 	prefix := strings.TrimSuffix(base, ext)
-	os.Mkdir(filepath.Join(dir, prefix+"-subdir"), 0755)
+	_ = os.Mkdir(filepath.Join(dir, prefix+"-subdir"), 0755)
 
 	files, err := l.oldLogFiles()
 	if err != nil {
@@ -770,7 +770,7 @@ func TestOldLogFilesEmptyDir(t *testing.T) {
 	defer l.Close()
 
 	// No files yet — should return empty list.
-	l.Write([]byte("x\n"))
+	_, _ = l.Write([]byte("x\n"))
 	files, err := l.oldLogFiles()
 	if err != nil {
 		t.Fatalf("oldLogFiles: %v", err)
@@ -802,7 +802,7 @@ func TestDoCompressSourceMissing(t *testing.T) {
 
 func TestDoCompressDestUnwritable(t *testing.T) {
 	l := newTestLogger(t)
-	l.Write([]byte("data\n"))
+	_, _ = l.Write([]byte("data\n"))
 	l.Close()
 
 	err := l.doCompress(l.Filename, "/nonexistent/dir/dst.gz")
@@ -817,7 +817,7 @@ func TestOpenExistingLargeFile(t *testing.T) {
 	defer l.Close()
 
 	// Write a file that's already at max size.
-	os.WriteFile(l.Filename, []byte(strings.Repeat("x", int(l.max()))), 0644)
+	_ = os.WriteFile(l.Filename, []byte(strings.Repeat("x", int(l.max()))), 0644)
 
 	// Writing should trigger rotation on open.
 	_, err := l.Write([]byte("new data\n"))
@@ -843,7 +843,7 @@ func BenchmarkWrite(b *testing.B) {
 	msg := []byte(strings.Repeat("x", 200) + "\n")
 	b.ResetTimer()
 	for range b.N {
-		l.Write(msg)
+		_, _ = l.Write(msg)
 	}
 }
 
@@ -859,7 +859,7 @@ func BenchmarkWriteParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			l.Write(msg)
+			_, _ = l.Write(msg)
 		}
 	})
 }
@@ -875,8 +875,8 @@ func BenchmarkRotation(b *testing.B) {
 	msg := []byte(strings.Repeat("x", 512*1024) + "\n")
 	b.ResetTimer()
 	for range b.N {
-		l.Write(msg)
-		l.Write(msg) // trigger rotation
+		_, _ = l.Write(msg)
+		_, _ = l.Write(msg) // trigger rotation
 	}
 }
 
@@ -892,6 +892,6 @@ func BenchmarkCompression(b *testing.B) {
 	msg := []byte(strings.Repeat("x", 200) + "\n")
 	b.ResetTimer()
 	for range b.N {
-		l.Write(msg)
+		_, _ = l.Write(msg)
 	}
 }
