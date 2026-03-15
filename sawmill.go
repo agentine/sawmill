@@ -580,38 +580,10 @@ func (l *Logger) compressFile(src string) {
 	dst := src + ".gz"
 	tmp := dst + ".tmp"
 
-	in, err := os.Open(src)
-	if err != nil {
-		return
-	}
-
-	out, err := os.Create(tmp)
-	if err != nil {
-		in.Close()
-		return
-	}
-
-	gz := gzip.NewWriter(out)
-	if _, err := io.Copy(gz, in); err != nil {
-		gz.Close()
-		out.Close()
-		in.Close()
+	if err := l.doCompress(src, tmp); err != nil {
 		_ = os.Remove(tmp)
 		return
 	}
-
-	if err := gz.Close(); err != nil {
-		out.Close()
-		in.Close()
-		_ = os.Remove(tmp)
-		return
-	}
-	if err := out.Close(); err != nil {
-		in.Close()
-		_ = os.Remove(tmp)
-		return
-	}
-	in.Close()
 
 	// Atomic rename: tmp → final. Prevents serving partial files.
 	if err := os.Rename(tmp, dst); err != nil {
@@ -621,6 +593,27 @@ func (l *Logger) compressFile(src string) {
 
 	// Remove the uncompressed original.
 	_ = os.Remove(src)
+}
+
+// doCompress performs the actual gzip compression from src to dst.
+func (l *Logger) doCompress(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	gz := gzip.NewWriter(out)
+	if _, err := io.Copy(gz, in); err != nil {
+		return err
+	}
+	return gz.Close()
 }
 
 // logInfo is a convenience struct to hold a backup file's timestamp and os.FileInfo.

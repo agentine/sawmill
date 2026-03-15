@@ -71,6 +71,14 @@ func TestClose(t *testing.T) {
 	}
 }
 
+func TestCloseWithoutWrite(t *testing.T) {
+	l := newTestLogger(t)
+	// Close without ever writing — inner is nil.
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close without write: %v", err)
+	}
+}
+
 func TestMaxSizeRotation(t *testing.T) {
 	l := newTestLogger(t)
 	l.MaxSize = 1 // 1 MB
