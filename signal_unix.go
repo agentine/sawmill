@@ -28,7 +28,7 @@ func (l *Logger) EnableSignalHandling() {
 
 	go func() {
 		for range l.sigCh {
-			l.Rotate()
+			_ = l.Rotate()
 		}
 	}()
 }
