@@ -92,10 +92,41 @@ type Logger struct {
 	// time.
 	LocalTime bool
 
-	mu   sync.Mutex
-	file *os.File
-	size int64
+	// RotateEvery specifies a duration after which the log file is rotated,
+	// regardless of size. For example, 24*time.Hour rotates daily.
+	// Zero means no duration-based rotation. This is additive to size-based
+	// rotation — whichever triggers first causes rotation.
+	RotateEvery time.Duration
+
+	// RotateAt specifies clock-aligned rotation times. Supported values:
+	//   "midnight" — rotate at 00:00 each day
+	//   "hourly"   — rotate at the top of each hour
+	// Empty string means no clock-aligned rotation. Uses LocalTime setting
+	// for timezone. This is additive to size-based and RotateEvery rotation.
+	RotateAt string
+
+	// clock is used for testing to control time.
+	clock clock
+
+	mu          sync.Mutex
+	file        *os.File
+	size        int64
+	lastRotate  time.Time
+	done        chan struct{}
+	tickerRunning bool
 }
+
+// clock is an interface for time operations, allowing tests to control time.
+type clock interface {
+	Now() time.Time
+	NewTicker(d time.Duration) *time.Ticker
+}
+
+// realClock uses the real time functions.
+type realClock struct{}
+
+func (realClock) Now() time.Time                         { return time.Now() }
+func (realClock) NewTicker(d time.Duration) *time.Ticker { return time.NewTicker(d) }
 
 // Write implements io.Writer. If a write would cause the log file to be larger
 // than MaxSize, the file is closed, renamed to include a timestamp of the
@@ -116,6 +147,15 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 		if err = l.openExistingOrNew(writeLen); err != nil {
 			return 0, err
 		}
+		l.lastRotate = l.now()
+		l.startTicker()
+	}
+
+	// Check time-based rotation.
+	if l.needsTimeRotation() {
+		if err := l.rotate(); err != nil {
+			return 0, err
+		}
 	}
 
 	if l.size+writeLen > l.max() {
@@ -130,9 +170,11 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 }
 
 // Close implements io.Closer, and closes the current logfile.
+// It stops any background goroutines (ticker, signal handler).
 func (l *Logger) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.stopTicker()
 	return l.close()
 }
 
@@ -162,6 +204,7 @@ func (l *Logger) rotate() error {
 		return err
 	}
 
+	l.lastRotate = l.now()
 	l.cleanup()
 	return nil
 }
@@ -246,7 +289,7 @@ func (l *Logger) backupName(name string, local bool) string {
 	ext := filepath.Ext(filename)
 	prefix := filename[:len(filename)-len(ext)]
 
-	t := time.Now()
+	t := l.now()
 	if !local {
 		t = t.UTC()
 	}
@@ -389,6 +432,120 @@ func (l *Logger) max() int64 {
 		return int64(DefaultMaxSize) * megabyte
 	}
 	return int64(l.MaxSize) * megabyte
+}
+
+// now returns the current time using the configured clock.
+func (l *Logger) now() time.Time {
+	if l.clock != nil {
+		return l.clock.Now()
+	}
+	return time.Now()
+}
+
+// needsTimeRotation checks if a time-based rotation is due.
+// The caller must hold l.mu.
+func (l *Logger) needsTimeRotation() bool {
+	if l.lastRotate.IsZero() {
+		return false
+	}
+	now := l.now()
+
+	if l.RotateEvery > 0 {
+		if now.Sub(l.lastRotate) >= l.RotateEvery {
+			return true
+		}
+	}
+
+	if l.RotateAt != "" {
+		switch l.RotateAt {
+		case "midnight":
+			last := l.lastRotate
+			cur := now
+			if !l.LocalTime {
+				last = last.UTC()
+				cur = cur.UTC()
+			}
+			if cur.YearDay() != last.YearDay() || cur.Year() != last.Year() {
+				return true
+			}
+		case "hourly":
+			last := l.lastRotate
+			cur := now
+			if !l.LocalTime {
+				last = last.UTC()
+				cur = cur.UTC()
+			}
+			if cur.Hour() != last.Hour() || cur.YearDay() != last.YearDay() || cur.Year() != last.Year() {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// startTicker starts the background goroutine that checks time-based rotation.
+// The caller must hold l.mu.
+func (l *Logger) startTicker() {
+	if l.tickerRunning {
+		return
+	}
+	if l.RotateEvery == 0 && l.RotateAt == "" {
+		return
+	}
+
+	l.done = make(chan struct{})
+	l.tickerRunning = true
+
+	interval := l.tickerInterval()
+	clk := l.clock
+	if clk == nil {
+		clk = realClock{}
+	}
+	ticker := clk.NewTicker(interval)
+
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-l.done:
+				return
+			case <-ticker.C:
+				l.mu.Lock()
+				if l.file != nil && l.needsTimeRotation() {
+					_ = l.rotate()
+				}
+				l.mu.Unlock()
+			}
+		}
+	}()
+}
+
+// stopTicker stops the background ticker goroutine.
+// The caller must hold l.mu.
+func (l *Logger) stopTicker() {
+	if !l.tickerRunning {
+		return
+	}
+	close(l.done)
+	l.tickerRunning = false
+}
+
+// tickerInterval returns the interval for the background ticker.
+func (l *Logger) tickerInterval() time.Duration {
+	if l.RotateEvery > 0 {
+		// Check at most every RotateEvery, but at least every minute.
+		d := l.RotateEvery / 10
+		if d < time.Second {
+			d = time.Second
+		}
+		if d > time.Minute {
+			d = time.Minute
+		}
+		return d
+	}
+	// For clock-aligned rotation, check every 10 seconds.
+	return 10 * time.Second
 }
 
 // logInfo is a convenience struct to hold a backup file's timestamp and os.FileInfo.

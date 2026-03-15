@@ -4,9 +4,42 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// mockClock is a controllable clock for testing time-based rotation.
+type mockClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newMockClock(t time.Time) *mockClock {
+	return &mockClock{now: t}
+}
+
+func (m *mockClock) Now() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.now
+}
+
+func (m *mockClock) Set(t time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.now = t
+}
+
+func (m *mockClock) Advance(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.now = m.now.Add(d)
+}
+
+func (m *mockClock) NewTicker(d time.Duration) *time.Ticker {
+	return time.NewTicker(d)
+}
 
 // newTestLogger creates a Logger pointing at a temp directory.
 func newTestLogger(t *testing.T) *Logger {
@@ -236,5 +269,129 @@ func TestLocalTime(t *testing.T) {
 	}
 	if len(files) == 0 {
 		t.Fatal("expected at least one backup")
+	}
+}
+
+func TestRotateEvery(t *testing.T) {
+	clk := newMockClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	l := newTestLogger(t)
+	l.RotateEvery = time.Hour
+	l.clock = clk
+	defer l.Close()
+
+	// First write — no rotation yet.
+	l.Write([]byte("msg1\n"))
+
+	dir := filepath.Dir(l.Filename)
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 file before rotation, got %d", len(entries))
+	}
+
+	// Advance past RotateEvery, next write should trigger rotation.
+	clk.Advance(61 * time.Minute)
+	l.Write([]byte("msg2\n"))
+
+	entries, _ = os.ReadDir(dir)
+	if len(entries) < 2 {
+		t.Fatalf("expected rotation after RotateEvery, got %d files", len(entries))
+	}
+
+	// Current file should only have msg2.
+	data, _ := os.ReadFile(l.Filename)
+	if string(data) != "msg2\n" {
+		t.Fatalf("expected only post-rotation content, got %q", data)
+	}
+}
+
+func TestRotateAtMidnight(t *testing.T) {
+	// Start at 23:59.
+	clk := newMockClock(time.Date(2026, 1, 1, 23, 59, 0, 0, time.UTC))
+	l := newTestLogger(t)
+	l.RotateAt = "midnight"
+	l.clock = clk
+	defer l.Close()
+
+	l.Write([]byte("before midnight\n"))
+
+	// Advance to 00:01 next day.
+	clk.Set(time.Date(2026, 1, 2, 0, 1, 0, 0, time.UTC))
+	l.Write([]byte("after midnight\n"))
+
+	dir := filepath.Dir(l.Filename)
+	entries, _ := os.ReadDir(dir)
+	if len(entries) < 2 {
+		t.Fatalf("expected rotation at midnight, got %d files", len(entries))
+	}
+
+	data, _ := os.ReadFile(l.Filename)
+	if string(data) != "after midnight\n" {
+		t.Fatalf("expected only post-midnight content, got %q", data)
+	}
+}
+
+func TestRotateAtHourly(t *testing.T) {
+	clk := newMockClock(time.Date(2026, 1, 1, 10, 55, 0, 0, time.UTC))
+	l := newTestLogger(t)
+	l.RotateAt = "hourly"
+	l.clock = clk
+	defer l.Close()
+
+	l.Write([]byte("before hour\n"))
+
+	// Advance to next hour.
+	clk.Set(time.Date(2026, 1, 1, 11, 0, 1, 0, time.UTC))
+	l.Write([]byte("after hour\n"))
+
+	dir := filepath.Dir(l.Filename)
+	entries, _ := os.ReadDir(dir)
+	if len(entries) < 2 {
+		t.Fatalf("expected rotation at hour boundary, got %d files", len(entries))
+	}
+}
+
+func TestNoTimeRotationWhenNotConfigured(t *testing.T) {
+	l := newTestLogger(t)
+	defer l.Close()
+
+	// No RotateEvery or RotateAt — should behave like lumberjack.
+	for i := 0; i < 100; i++ {
+		l.Write([]byte("data\n"))
+	}
+
+	dir := filepath.Dir(l.Filename)
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("expected no rotation without time config, got %d files", len(entries))
+	}
+}
+
+func TestRotateEveryAndSizeCombined(t *testing.T) {
+	clk := newMockClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	l := newTestLogger(t)
+	l.MaxSize = 1 // 1 MB
+	l.RotateEvery = time.Hour
+	l.clock = clk
+	defer l.Close()
+
+	// First, trigger a size-based rotation.
+	msg := strings.Repeat("x", 512*1024) + "\n"
+	l.Write([]byte(msg))
+	l.Write([]byte(msg))
+	l.Write([]byte(msg)) // should trigger size rotation
+
+	dir := filepath.Dir(l.Filename)
+	entries, _ := os.ReadDir(dir)
+	if len(entries) < 2 {
+		t.Fatalf("expected size-based rotation, got %d files", len(entries))
+	}
+
+	// Now trigger a time-based rotation.
+	clk.Advance(61 * time.Minute)
+	l.Write([]byte("after time\n"))
+
+	entries, _ = os.ReadDir(dir)
+	if len(entries) < 3 {
+		t.Fatalf("expected both size and time rotations, got %d files", len(entries))
 	}
 }
